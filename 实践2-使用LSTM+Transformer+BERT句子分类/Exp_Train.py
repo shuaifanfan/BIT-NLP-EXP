@@ -5,19 +5,20 @@ import json
 import os
 
 from tqdm import tqdm
-from torch.utils.data import  DataLoader
+from torch.utils.data import DataLoader
 from Exp_DataSet import Corpus
-from Exp_Model import BiLSTM_model, Transformer_model
+from Exp_Model import BiLSTM_model, Transformer_model, Bert_Model
+from transformers import BertTokenizer, BertModel
 
 
 def train():
-    '''
+    """
     进行训练
-    '''
+    """
     max_valid_acc = 0
-    
+
     for epoch in range(num_epochs):
-        model.train()  #这一句话是为了启用 BatchNormalization 和 Dropout，一定要在训练前调用，否则会有影响
+        model.train()  # 这一句话是为了启用 BatchNormalization 和 Dropout，一定要在训练前调用，否则会有影响
 
         total_loss = []
         total_true = []
@@ -26,26 +27,32 @@ def train():
 
         for data in tqdm_iterator:
             # 选取对应批次数据的输入和标签
+            if isinstance(model, Bert_Model):
+                batch_z = data[2].to(device)
             batch_x, batch_y = data[0].to(device), data[1].to(device)
 
             # 模型预测
-            #------------------------------------change------------------------------------#
-            y_hat = model(batch_x)
-            #------------------------------------endOfChange------------------------------------#
+            # ------------------------------------change------------------------------------#
+            if isinstance(model, Bert_Model):
+                y_hat = model(batch_x, batch_z)
+            else:
+                y_hat = model(batch_x)
+            # ------------------------------------endOfChange------------------------------------#
+            # print(f"type: {type(y_hat)}, type: {type(batch_y)}")
             loss = loss_function(y_hat, batch_y)
 
-            optimizer.zero_grad()   # 梯度清零
-            loss.backward()         # 计算梯度
-            optimizer.step()        # 更新参数
+            optimizer.zero_grad()  # 梯度清零
+            loss.backward()  # 计算梯度
+            optimizer.step()  # 更新参数
 
             y_hat = torch.tensor([torch.argmax(_) for _ in y_hat]).to(device)
-            
+
             total_true.append(torch.sum(y_hat == batch_y).item())
             total_loss.append(loss.item())
 
             tqdm_iterator.set_postfix(loss=sum(total_loss) / len(total_loss),
                                       acc=sum(total_true) / (batch_size * len(total_true)))
-        
+
         tqdm_iterator.close()
 
         train_loss = sum(total_loss) / len(total_loss)
@@ -56,7 +63,8 @@ def train():
         if valid_acc > max_valid_acc:
             torch.save(model, os.path.join(output_folder, "model.ckpt"))
 
-        print(f"epoch: {epoch}, train loss: {train_loss:.4f}, train accuracy: {train_acc*100:.2f}%, valid accuracy: {valid_acc*100:.2f}%")
+        print(
+            f"epoch: {epoch}, train loss: {train_loss:.4f}, train accuracy: {train_acc * 100:.2f}%, valid accuracy: {valid_acc * 100:.2f}%")
 
 
 def valid():
@@ -65,12 +73,19 @@ def valid():
     '''
     total_true = []
 
-    model.eval() #这句话在测试之前使用，不启用 BatchNormalization 和 Dropout
+    model.eval()  # 这句话在测试之前使用，不启用 BatchNormalization 和 Dropout
     with torch.no_grad():
         for data in tqdm(data_loader_valid, dynamic_ncols=True):
+            if isinstance(model, Bert_Model):
+                batch_z = data[2].to(device)
             batch_x, batch_y = data[0].to(device), data[1].to(device)
 
-            y_hat = model(batch_x)
+            # 模型预测
+            # ------------------------------------change------------------------------------#
+            if isinstance(model, Bert_Model):
+                y_hat = model(batch_x, batch_z)
+            else:
+                y_hat = model(batch_x)
             # 取分类概率最大的类别作为预测的类别
             y_hat = torch.tensor([torch.argmax(_) for _ in y_hat]).to(device)
 
@@ -83,16 +98,23 @@ def predict():
     '''
     读取训练好的模型对测试集进行预测，并生成结果文件
     '''
-    test_ids = [] 
+    test_ids = []
     test_pred = []
 
     model = torch.load(os.path.join(output_folder, "model.ckpt")).to(device)
     model.eval()
     with torch.no_grad():
-        for data in tqdm(data_loader_test, dynamic_ncols=True): 
-            batch_x, batch_y = data[0].to(device), data[1]
+        for data in tqdm(data_loader_test, dynamic_ncols=True):
+            if isinstance(model, Bert_Model):
+                batch_z = data[2].to(device)
+            batch_x, batch_y = data[0].to(device), data[1].to(device)
 
-            y_hat = model(batch_x)
+            # 模型预测
+            # ------------------------------------change------------------------------------#
+            if isinstance(model, Bert_Model):
+                y_hat = model(batch_x, batch_z)
+            else:
+                y_hat = model(batch_x)
             y_hat = torch.tensor([torch.argmax(_) for _ in y_hat])
 
             test_ids += batch_y.tolist()
@@ -104,55 +126,56 @@ def predict():
             one_data = {}
             one_data["id"] = test_ids[idx]
             one_data["pred_label_desc"] = dataset.dictionary.idx2label[label_idx][1]
-            json_data = json.dumps(one_data)    # 将字典转为json格式的字符串
+            json_data = json.dumps(one_data)  # 将字典转为json格式的字符串
             f.write(json_data + "\n")
-            
+
 
 if __name__ == '__main__':
     dataset_folder = './data/tnews_public'
     output_folder = './output'
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-
-    #-----------------------------------------------------begin-----------------------------------------------------#
+    print(f"using device: {device}")
+    # -----------------------------------------------------begin-----------------------------------------------------#
     # 以下为超参数，可根据需要修改
-        # 每个词向量的维度
-    max_token_per_sent = 50 # 每个句子预设的最大 token 数
+    # 每个词向量的维度
+    max_token_per_sent = 50  # 每个句子预设的最大 token 数
     batch_size = 32
     num_epochs = 5
     lr = 1e-4
-    #------------------------------------------------------end------------------------------------------------------#
+    # ------------------------------------------------------end------------------------------------------------------#
+    print(f"Loading tokenizer..")
+    tokenizer = BertTokenizer.from_pretrained('./bert-base-chinese')
+    print("Tokenizer Loaded")
+    dataset = Corpus(dataset_folder, max_token_per_sent, tokenizer)
 
-    dataset = Corpus(dataset_folder, max_token_per_sent)
-
-    embedding_dim = dataset.embedding_weight.shape[1] # 词向量维度 
-
-    vocab_size = len(dataset.dictionary.tkn2word) # 词表大小
+    embedding_dim = 300  # 词向量维度
 
     data_loader_train = DataLoader(dataset=dataset.train, batch_size=batch_size, shuffle=True)
     data_loader_valid = DataLoader(dataset=dataset.valid, batch_size=batch_size, shuffle=False)
     data_loader_test = DataLoader(dataset=dataset.test, batch_size=batch_size, shuffle=False)
 
-    #-----------------------------------------------------begin-----------------------------------------------------#
+    # -----------------------------------------------------begin-----------------------------------------------------#
     # 可修改选择的模型以及传入的参数
     # model = BiLSTM_model(vocab_size=vocab_size,
     #                      ntoken=max_token_per_sent,
     #                      d_emb=embedding_dim,
     #                      embedding_weight=dataset.embedding_weight # 使用预训练的词向量，需传入 embedding_weight
     #                      ).to(device)     
-    model = Transformer_model(vocab_size=vocab_size,
-                         ntoken=max_token_per_sent,
-                         d_emb=embedding_dim,
-                         nhead=10,#head需要整除d_emb，300除以5等于60
-                         #d_hid=80,
-                         embedding_weight=dataset.embedding_weight # 使用预训练的词向量，需传入 embedding_weight
-                         ).to(device)         
-    #------------------------------------------------------end------------------------------------------------------#
-    
+    # model = Transformer_model(vocab_size=len(dataset.dictionary.tkn2word),
+    #                      ntoken=max_token_per_sent,
+    #                      d_emb=embedding_dim,
+    #                      nhead=10,#head需要整除d_emb，300除以5等于60
+    #                      #d_hid=80,
+    #                      embedding_weight=dataset.embedding_weight # 使用预训练的词向量，需传入 embedding_weight
+    #                      ).to(device)
+    model = Bert_Model(dropout=0.3).to(device)
+    # ------------------------------------------------------end------------------------------------------------------#
+
     # 设置损失函数
     loss_function = nn.CrossEntropyLoss()
     # 设置优化器                                       
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=5e-4)  
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=5e-4)
 
     # 进行训练
     train()

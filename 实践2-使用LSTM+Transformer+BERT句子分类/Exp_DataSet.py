@@ -36,9 +36,9 @@ class Corpus(object):
     
     该类适用于任务一、任务二，若要完成任务三，需对整个类进行调整，例如，可直接调用预训练模型提供的 tokenizer 将文本转为对应的 token 序列。
     '''
-    def __init__(self, path, max_token_per_sent):
+    def __init__(self, path, max_token_per_sent, tokenizer=None):
         self.dictionary = Dictionary(path)
-
+        self.tokenizer = tokenizer
         self.max_token_per_sent = max_token_per_sent
 
         self.train = self.tokenize(os.path.join(path, 'train.json'))
@@ -49,16 +49,17 @@ class Corpus(object):
         #-----------------------------------------------------begin-----------------------------------------------------#
         # 若要采用预训练的 embedding, 需处理得到 token->embedding 的映射矩阵 embedding_weight。矩阵的格式参考 nn.Embedding() 中的参数 _weight
         # 注意，需考虑 [PAD] 和 [UNK] 两个特殊词向量的设置
-        word2vector = KeyedVectors.load_word2vec_format(os.path.join(path,'sgns.target.word-word.dynwin5.thr10.neg5.dim300.iter5'))
-        embedding_dim = word2vector.vector_size
-        embedding_weight = np.zeros((len(self.dictionary.tkn2word), embedding_dim))
-        for word, token in self.dictionary.word2tkn.items():
-            if word in word2vector:
-                embedding_weight[token] = word2vector[word]
-            else:
-                embedding_weight[token] = np.random.uniform(-0.01, 0.01, embedding_dim).astype("float32")
-        self.embedding_weight = torch.tensor(embedding_weight, dtype=torch.float32)
-        
+        if tokenizer is None:
+            word2vector = KeyedVectors.load_word2vec_format(os.path.join(path,'sgns.target.word-word.dynwin5.thr10.neg5.dim300.iter5'))
+            embedding_dim = word2vector.vector_size
+            embedding_weight = np.zeros((len(self.dictionary.tkn2word), embedding_dim))
+            for word, token in self.dictionary.word2tkn.items():
+                if word in word2vector:
+                    embedding_weight[token] = word2vector[word]
+                else:
+                    embedding_weight[token] = np.random.uniform(-0.01, 0.01, embedding_dim).astype("float32")
+            self.embedding_weight = torch.tensor(embedding_weight, dtype=torch.float32)
+            
 
         #把train, valid, test 中的label换乘词向量
         #不需要这一步，在LSTM_Model中会自动转换
@@ -84,6 +85,7 @@ class Corpus(object):
         处理指定的数据集分割，处理后每条数据中的 sentence 都将转化成对应的 token 序列。
         '''
         idss = []
+        maskes = []
         labels = []
         with open(path, 'r', encoding='utf8') as f:
             for line in f:
@@ -91,18 +93,24 @@ class Corpus(object):
                 sent = one_data['sentence']
                 #-----------------------------------------------------begin-----------------------------------------------------#
                 # 若要采用预训练的 embedding, 需在此处对 sent 进行分词
+                if self.tokenizer is None:
+                    sent = jieba.lcut(sent)
 
-                sent = jieba.lcut(sent)
+                    #------------------------------------------------------end------------------------------------------------------#
+                    # 向词典中添加词
+                    for word in sent:
+                        self.dictionary.add_word(word)
 
-                #------------------------------------------------------end------------------------------------------------------#
-                # 向词典中添加词
-                for word in sent:
-                    self.dictionary.add_word(word)
+                    ids = []
+                    for word in sent:
+                        ids.append(self.dictionary.word2tkn[word])
+                    idss.append(self.pad(ids))
+                else:
+                    sent = self.tokenizer.encode_plus(sent, padding = 'max_length', max_length=self.max_token_per_sent, truncation=True)
+                    idss.append(sent['input_ids'])
+                    maskes.append(sent['attention_mask'])
 
-                ids = []
-                for word in sent:
-                    ids.append(self.dictionary.word2tkn[word])
-                idss.append(self.pad(ids))
+
                 
                 # 测试集无标签，在 label 中存测试数据的 id，便于最终预测文件的打印
                 if test_mode:
@@ -114,8 +122,12 @@ class Corpus(object):
 
             idss = torch.tensor(np.array(idss))
             labels = torch.tensor(np.array(labels)).long()
+        if self.tokenizer is None:
+            return TensorDataset(idss, labels)
+        else :
+            maskes = torch.tensor(np.array(maskes))
+            return TensorDataset(idss, labels, maskes)
              #idss的内容格式：[ ids1,id2....    ]
              #labels的内容格式：[label1,label2....]
              #TensorDataset是一个pytorch的包装数据的类，可以把数据包装成TensorDataset的形式，然后再放入DataLoader中
              #格式是 (ids1, label1)元素组成的数据集
-        return TensorDataset(idss, labels)

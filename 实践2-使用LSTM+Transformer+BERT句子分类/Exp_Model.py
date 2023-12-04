@@ -2,6 +2,8 @@ import torch.nn as nn
 import torch as torch
 import math
 import torch.nn.functional as F
+from transformers import BertModel
+
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):
@@ -23,7 +25,8 @@ class PositionalEncoding(nn.Module):
 
 
 class Transformer_model(nn.Module):
-    def __init__(self, vocab_size, ntoken, d_emb=512, d_hid=2048, nhead=8, nlayers=6, dropout=0.2, embedding_weight=None):
+    def __init__(self, vocab_size, ntoken, d_emb=512, d_hid=2048, nhead=8, nlayers=6, dropout=0.2,
+                 embedding_weight=None):
         super(Transformer_model, self).__init__()
         # 将"预训练的词向量"整理成 token->embedding 的二维映射矩阵 emdedding_weight 的形式，初始化 _weight
         # 当 emdedding_weight == None 时，表示随机初始化
@@ -32,7 +35,7 @@ class Transformer_model(nn.Module):
         self.pos_encoder = PositionalEncoding(d_model=d_emb, max_len=ntoken)
         self.encode_layer = nn.TransformerEncoderLayer(d_model=d_emb, nhead=nhead, dim_feedforward=d_hid)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer=self.encode_layer, num_layers=nlayers)
-        #-----------------------------------------------------begin-----------------------------------------------------#
+        # -----------------------------------------------------begin-----------------------------------------------------#
         # 请自行设计对 transformer 隐藏层数据的处理和选择方法
         self.dropout = nn.Dropout(dropout)  # 可选
         self.ntoken = ntoken
@@ -40,30 +43,29 @@ class Transformer_model(nn.Module):
         self.d_emb = d_emb
         # 请自行设计分类器
         self.fc = nn.Sequential(
-            nn.Linear(self.ntoken*self.d_emb, 256),
+            nn.Linear(self.ntoken * self.d_emb, 256),
             nn.LeakyReLU(),
             nn.Linear(256, 15),
         )
 
-        #------------------------------------------------------end------------------------------------------------------#
+        # ------------------------------------------------------end------------------------------------------------------#
 
     def forward(self, x):
-       
-        x = self.embed(x)     
-        x = x.permute(1, 0, 2)          
+        x = self.embed(x)
+        x = x.permute(1, 0, 2)
         x = self.pos_encoder(x)
         x = self.transformer_encoder(x)
-        x = x.permute(1, 0, 2)      # [batch_size, ntoken, d_emb]
-        #-----------------------------------------------------begin-----------------------------------------------------#
+        x = x.permute(1, 0, 2)  # [batch_size, ntoken, d_emb]
+        # -----------------------------------------------------begin-----------------------------------------------------#
         # 对 transformer_encoder 的隐藏层输出进行处理和选择，并完成分类
-        x = self.dropout(x) # 可选
-        x = x.reshape(-1, self.ntoken*self.d_emb) 
-       # x = F.avg_pool1d(x.permute(0, 2, 1), x.size(1)).squeeze()   # 池化并挤压后[batch_size, d_emb]
+        x = self.dropout(x)  # 可选
+        x = x.reshape(-1, self.ntoken * self.d_emb)
+        # x = F.avg_pool1d(x.permute(0, 2, 1), x.size(1)).squeeze()   # 池化并挤压后[batch_size, d_emb]
         x = self.fc(x)
-        #------------------------------------------------------end------------------------------------------------------#
+        # ------------------------------------------------------end------------------------------------------------------#
         return x
-    
-    
+
+
 class BiLSTM_model(nn.Module):
     """
     vocab_size: 词表大小,不是词向量表中词的个数，而是数据集中切出来的所有词的个数
@@ -74,36 +76,59 @@ class BiLSTM_model(nn.Module):
     dropout: dropout的比例
     embedding_weight: 预训练的词向量，格式为 token->embedding 的二维映射矩阵
     """
+
     def __init__(self, vocab_size, ntoken, d_emb=100, d_hid=80, nlayers=1, dropout=0.2, embedding_weight=None):
         super(BiLSTM_model, self).__init__()
         # 将"预训练的词向量"整理成 token->embedding 的二维映射矩阵 emdedding_weight 的形式，初始化 _weight
         # 当 emdedding_weight == None 时，表示随机初始化
         self.embed = nn.Embedding(num_embeddings=vocab_size, embedding_dim=d_emb, _weight=embedding_weight)
 
-        self.lstm = nn.LSTM(input_size=d_emb, hidden_size=d_hid, num_layers=nlayers, bidirectional=True, batch_first=True)
-        #-----------------------------------------------------begin-----------------------------------------------------#
+        self.lstm = nn.LSTM(input_size=d_emb, hidden_size=d_hid, num_layers=nlayers, bidirectional=True,
+                            batch_first=True)
+        # -----------------------------------------------------begin-----------------------------------------------------#
         # 请自行设计对 bilstm 隐藏层数据的处理和选择方法
         self.dropout = nn.Dropout(dropout)  # 可选
 
         # 请自行设计分类器
         self.classifier = nn.Sequential(
-            nn.Linear(ntoken*d_hid*2, 256),
+            nn.Linear(ntoken * d_hid * 2, 256),
             nn.LeakyReLU(),
             nn.Linear(256, 15),
         )
         self.ntoken = ntoken
         self.d_hid = d_hid
-        #------------------------------------------------------end------------------------------------------------------#
+        # ------------------------------------------------------end------------------------------------------------------#
 
-    def forward(self, x:torch.Tensor):
-        
+    def forward(self, x: torch.Tensor):
         # x = x.long()
-        #print("输入embed的x:",type(x), x.shape)
+        # print("输入embed的x:",type(x), x.shape)
         x = self.embed(x)
         x = self.lstm(x)[0]
-        #-----------------------------------------------------begin-----------------------------------------------------#
+        # -----------------------------------------------------begin-----------------------------------------------------#
         # 对 bilstm 的隐藏层输出进行处理和选择，并完成分类
-        x = self.dropout(x).reshape(-1, self.ntoken*self.d_hid*2)   # ntoken*nhid*2 (2 means bidirectional)
+        x = self.dropout(x).reshape(-1, self.ntoken * self.d_hid * 2)  # ntoken*nhid*2 (2 means bidirectional)
         x = self.classifier(x)
-        #------------------------------------------------------end------------------------------------------------------#
+        # ------------------------------------------------------end------------------------------------------------------#
+        return x
+
+
+class Bert_Model(nn.Module):
+    def __init__(self, dropout=0.2):
+        super(Bert_Model, self).__init__()
+        self.dropout = nn.Dropout(dropout)
+        print("Loading Model...")
+        self.bert = BertModel.from_pretrained('./bert-base-chinese')
+        print("Loaded.")
+        self.classifier = nn.Sequential(
+            nn.Linear(768, 256),
+            nn.LeakyReLU(),
+            nn.Linear(256, 15),
+        )
+
+    def forward(self, x, mask=None):
+        with torch.no_grad():
+            x = self.bert(x, attention_mask=mask)[0][:, 0, :]
+        x = self.dropout(x)
+        x = self.classifier(x)
+
         return x
